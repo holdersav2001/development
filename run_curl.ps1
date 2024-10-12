@@ -3,7 +3,7 @@ $headers = @{
 }
 
 $connectorName = "postgresql-financial-conn"
-$baseUrl = "http://localhost:8093/connectors"
+$baseUrl = "http://localhost:8084/connectors"
 
 $config = @{
     "connector.class" = "io.debezium.connector.postgresql.PostgresConnector"
@@ -35,6 +35,13 @@ catch {
         Write-Host "Connector $connectorName does not exist. Creating new connector..."
         $response = Invoke-RestMethod -Uri $baseUrl -Method Post -Headers $headers -Body $body
         Write-Host "Connector created successfully."
+    }
+    elseif ($_.Exception.Message -match "Unable to connect to the remote server") {
+        Write-Host "Error: Unable to connect to the Debezium server at $baseUrl"
+        Write-Host "Please ensure that the Debezium container is running and the port 8084 is correctly mapped."
+        Write-Host "You can check the status of the containers using 'docker-compose ps'"
+        Write-Host "If the problem persists, check the Debezium container logs using 'docker-compose logs debezium'"
+        exit 1
     }
     else {
         Write-Host "An error occurred: $_"

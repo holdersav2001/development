@@ -22,6 +22,9 @@ services:
     image: confluentinc/cp-kafka:7.4.0
     hostname: broker
     container_name: broker
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     ports:
       - '29092:29092'
       - '9092:9092'
@@ -82,26 +85,65 @@ services:
       broker:
         condition: service_healthy
     ports:
-      - '8093:8083'
+      - '8084:8083'
     environment:
       BOOTSTRAP_SERVERS: broker:29092
-      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
       GROUP_ID: 1
       CONFIG_STORAGE_TOPIC: connect_configs
-      STATUS_STORAGE_TOPIC: connect_statuses
       OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
       KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       ENABLE_DEBEZIUM_SCRIPTING: 'true'
+      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
+      CONNECT_REST_PORT: 8083
     healthcheck:
-      test:
-        [ 'CMD', 'curl', '--silent', '--fail', '-X', 'GET', 'http://localhost:8083/connectors', ]
-      start_period: 10s
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "curl", "-f", "http://localhost:8083/connectors"]
+      interval: 30s
+      timeout: 10s
       retries: 5
+      start_period: 30s
     networks:
       code-with-yu:
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.4.0
+    container_name: kafka-connect
+    depends_on:
+      - broker
+      - elasticsearch
+    ports:
+      - 8083:8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: compose-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/usr/share/confluent-hub-components'
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing connector plugins"
+        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:latest
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        #
+        sleep infinity
+    networks:
+      - code-with-yu
 
   debezium-ui:
     image: debezium/debezium-ui:latest
@@ -136,7 +178,44 @@ services:
     networks:
       code-with-yu:
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.14.0
+    container_name: elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - code-with-yu
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.14.0
+    container_name: kibana
+    ports:
+      - 5601:5601
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+    networks:
+      - code-with-yu
+    depends_on:
+      - elasticsearch
+
 networks:
   code-with-yu:
     name: code-with-yu
     driver: bridge
+
+volumes:
+  esdata:
+    driver: local
